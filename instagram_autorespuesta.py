@@ -63,8 +63,8 @@ USUARIO_ESPECIFICO_IGSID = os.environ.get("USUARIO_ESPECIFICO_IGSID", "")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-MENSAJE_GENERICO = "¡Hola! Gracias por escribirme 🙌 Te contesto en cuanto pueda."
-MENSAJE_USUARIO_ESPECIFICO = "¡Hola de nuevo! Este es tu mensaje personalizado 💬"
+MENSAJE_GENERICO = "HEYY"
+MENSAJE_USUARIO_ESPECIFICO = "HEYYY"
 
 
 @app.route("/", methods=["GET"])
