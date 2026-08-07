@@ -1,15 +1,12 @@
-# Despliegue en el servidor de Oracle. Dos contenedores:
-#   bot   -> la app Flask, solo accesible desde dentro de la red de compose
-#   caddy -> reverse proxy que gestiona el certificado TLS automáticamente
+# Solo el bot. El reverse proxy y los certificados viven en infra/, porque son
+# compartidos con el resto de proyectos del servidor.
 #
-# Meta exige HTTPS con certificado válido para entregar webhooks; un
-# autofirmado no sirve. Caddy pide y renueva el de Let's Encrypt solo, sin
-# cron ni certbot, siempre que DOMINIO apunte a la IP pública de la VM.
+# Este contenedor NO publica ningún puerto: solo es accesible desde la red `web`,
+# es decir, a través de Caddy. Así nadie puede saltarse el TLS llegando al 8000.
 #
-# Arranque:  DOMINIO=tu-subdominio.duckdns.org docker compose up -d --build
+# Requisito previo (una sola vez en el servidor):  docker network create web
+# Arranque:  docker compose up -d --build
 
-# Nombre de proyecto fijo: evita que compose derive nombres del directorio y
-# acabe pisando contenedores o imágenes de otros proyectos de esta máquina.
 name: insta-response
 
 services:
@@ -18,13 +15,14 @@ services:
     # Tag explícito y propio. Nunca reutilizar un nombre de imagen existente:
     # `docker build -t` sobre un tag ajeno lo sobrescribe sin avisar.
     image: insta-response-bot:local
+    # Caddy enruta hacia este nombre; si lo cambias, actualiza infra/Caddyfile.
     container_name: insta-response-bot
     restart: unless-stopped
     env_file: .env
-    # Sin "ports": la app NO se expone a internet directamente, solo a través
-    # de Caddy. Así nadie puede saltarse el TLS llegando al 8000 a pelo.
     expose:
       - "8000"
+    networks:
+      - web
     healthcheck:
       # La imagen slim no trae curl; se usa el propio Python.
       test: ["CMD", "python", "-c",
@@ -40,27 +38,7 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  caddy:
-    image: caddy:2-alpine     # imagen oficial, no se construye nada aquí
-    container_name: insta-response-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"     # necesario para el desafío HTTP de Let's Encrypt
-      - "443:443"
-    environment:
-      DOMINIO: ${DOMINIO:?define DOMINIO, ej. DOMINIO=tu-subdominio.duckdns.org}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data      # guarda los certificados: sin esto se repiden en cada reinicio
-      - caddy_config:/config
-    depends_on:
-      - bot
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-volumes:
-  caddy_data:
-  caddy_config:
+networks:
+  web:
+    external: true
+    name: web

@@ -1,0 +1,45 @@
+# Un bloque por sitio. Caddy pide y renueva un certificado de Let's Encrypt
+# para cada dominio por separado, sin configuración extra.
+#
+# Requisitos para que un bloque funcione:
+#   1. El dominio resuelve a la IP pública de esta VM (registro A).
+#   2. El contenedor destino está en la red `web` (ver el compose del proyecto).
+#   3. Se referencia al contenedor por su `container_name`, no por localhost:
+#      cada contenedor es un host distinto dentro de la red de Docker.
+#
+# Tras editar este archivo:  docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+# (recarga sin cortar conexiones; no hace falta reiniciar el contenedor)
+
+# --- Bot de auto-respuesta de Instagram ---------------------------------
+# Sustituye por tu subdominio real de DuckDNS.
+occhakitten-bot.duckdns.org {
+	reverse_proxy insta-response-bot:8000
+
+	# Importante no transformar el cuerpo de la petición: la firma HMAC del
+	# webhook se calcula sobre los bytes exactos que manda Meta.
+
+	log {
+		output stdout
+		format console
+	}
+}
+
+# --- Página web (descomenta y ajusta cuando la tengas) -------------------
+# Opción A: la web es un contenedor (Nginx, Node, PHP, lo que sea).
+#
+# mi-web.duckdns.org {
+# 	reverse_proxy mi-web:80
+# 	log {
+# 		output stdout
+# 		format console
+# 	}
+# }
+#
+# Opción B: la web es HTML estático y lo sirve el propio Caddy. Monta la
+# carpeta en el compose de infra:  - /srv/mi-web:/srv/mi-web:ro
+#
+# mi-web.duckdns.org {
+# 	root * /srv/mi-web
+# 	file_server
+# 	encode gzip
+# }
