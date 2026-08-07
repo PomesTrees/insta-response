@@ -78,6 +78,7 @@ import hmac
 import json
 import logging
 import os
+import random
 import sys
 import time
 
@@ -100,13 +101,20 @@ app = Flask(__name__)
 
 # --- Configuración (usa variables de entorno, nunca hardcodees tokens) ---
 VERIFY_TOKEN = os.environ["IG_VERIFY_TOKEN"]        # lo inventas tú, lo pones también en el dashboard de Meta
-IG_ACCESS_TOKEN = os.environ["IG_ACCESS_TOKEN"]      # token generado en API setup with Instagram Login
 
-# Para el POST de envío, "me" resuelve solo a la cuenta dueña del token: evita
-# tener que decidir entre el "id" (27372079592492062) y el "user_id"
-# (17841437028011935) de @occhakitten. Se probaron los tres contra la API y los
-# tres son válidos, así que "me" es el que no se puede configurar mal.
-IG_ACCOUNT_ID = os.environ.get("IG_ACCOUNT_ID") or "me"
+# Tokens de las cuentas de Instagram conectadas, separados por comas. Cada cuenta
+# tiene el suyo (API setup with Instagram Login → Generate Token, una vez por
+# cuenta). Para una sola cuenta sirve igual IG_ACCESS_TOKEN, que se sigue
+# leyendo por compatibilidad.
+#
+#   IG_ACCESS_TOKENS=IGAAxxx...,IGAAyyy...,IGAAzzz...
+#
+# No hace falta configurar los IDs de cada cuenta: al arrancar se consulta
+# GET /me con cada token y se arma sola la tabla de enrutamiento. Así no hay
+# forma de emparejar mal un token con un ID.
+def _tokens_configurados() -> list[str]:
+    crudo = os.environ.get("IG_ACCESS_TOKENS") or os.environ.get("IG_ACCESS_TOKEN", "")
+    return [t.strip() for t in crudo.split(",") if t.strip()]
 
 # App Secret para validar la firma de los webhooks.
 # Meta documenta el de App settings → Basic → App Secret, pero "API setup with
@@ -131,8 +139,10 @@ USUARIO_ESPECIFICO_IGSID = os.environ.get("USUARIO_ESPECIFICO_IGSID", "")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-MENSAJE_GENERICO = "HEYY"
-MENSAJE_USUARIO_ESPECIFICO = "HEYYY"
+# Banco de respuestas. Se elige una al azar en cada mensaje entrante, para que
+# la cuenta no conteste siempre exactamente lo mismo. Añade o quita frases aquí.
+RESPUESTAS = ["HEYY", "wait", "give me 5", "yes"]
+RESPUESTAS_USUARIO_ESPECIFICO = ["HEYYY"]
 
 # Texto que Meta devuelve cuando el access token ya no sirve. Sirve para darte
 # instrucciones concretas en el aviso de Telegram en vez de un error crudo.
@@ -141,6 +151,90 @@ TOKEN_CADUCADO = "Error validating access token"
 # No repetir el mismo aviso de fallo más de una vez cada 15 min.
 VENTANA_AVISO_REPETIDO_S = 15 * 60
 _ultimos_avisos: dict[str, float] = {}
+
+
+class Cuenta:
+    """Una cuenta de Instagram conectada, con su token propio."""
+
+    def __init__(self, token: str, id_: str, user_id: str, username: str):
+        self.token = token
+        self.id = id_
+        self.user_id = user_id
+        self.username = username
+
+    def __repr__(self) -> str:  # solo para logs
+        return f"@{self.username} (id={self.id}, user_id={self.user_id})"
+
+
+# Tabla de enrutamiento: se indexa cada cuenta por sus DOS identificadores,
+# porque según el evento Meta manda uno u otro y no siempre el mismo.
+CUENTAS: dict[str, Cuenta] = {}
+
+
+def cargar_cuentas() -> None:
+    """Resuelve cada token a su cuenta con GET /me y llena CUENTAS.
+
+    Un token inválido no tumba el arranque: se registra el error y las demás
+    cuentas siguen funcionando. Si ninguna carga, el bot arranca igual y lo
+    dice en el log — así el health check sigue vivo y puedes diagnosticarlo,
+    en vez de tener un servicio que no levanta y no explica por qué."""
+    for token in _tokens_configurados():
+        try:
+            r = requests.get(
+                "https://graph.instagram.com/v21.0/me",
+                params={"fields": "id,user_id,username", "access_token": token},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            log.error("No se pudo resolver un token contra la API: %s", e)
+            continue
+
+        if not r.ok:
+            log.error("Token rechazado por Meta al arrancar: %s %s",
+                      r.status_code, r.text[:300])
+            continue
+
+        datos = r.json()
+        cuenta = Cuenta(token, datos.get("id", ""), datos.get("user_id", ""),
+                        datos.get("username", "?"))
+        for identificador in (cuenta.id, cuenta.user_id):
+            if identificador:
+                CUENTAS[identificador] = cuenta
+        log.info("Cuenta cargada: %s", cuenta)
+
+    if not CUENTAS:
+        log.error("NINGUNA cuenta de Instagram cargada: revisa IG_ACCESS_TOKENS. "
+                  "El bot recibirá webhooks pero no podrá responder.")
+    else:
+        log.info("%d cuenta(s) activa(s)", len({c.id for c in CUENTAS.values()}))
+
+
+def cuenta_del_evento(entry: dict, evento: dict) -> Cuenta | None:
+    """Averigua a qué cuenta conectada iba dirigido el mensaje.
+
+    Meta identifica a la cuenta receptora en `entry.id`, y también en
+    `messaging[].recipient.id`. Se prueban los dos porque el formato varía
+    entre tipos de evento y no queremos depender de cuál manda hoy."""
+    candidatos = [entry.get("id"), evento.get("recipient", {}).get("id")]
+    for identificador in candidatos:
+        if identificador and identificador in CUENTAS:
+            return CUENTAS[identificador]
+
+    # Con una sola cuenta configurada no hay ambigüedad posible: responde igual
+    # aunque el ID no cuadre, en vez de quedarse callado por un detalle de formato.
+    unicas = {c.id: c for c in CUENTAS.values()}
+    if len(unicas) == 1:
+        cuenta = next(iter(unicas.values()))
+        log.warning("IDs del evento %s no están en la tabla; uso la única cuenta (%s)",
+                    candidatos, cuenta)
+        return cuenta
+
+    log.error("No sé a qué cuenta pertenece el evento. IDs vistos: %s. "
+              "Cuentas conocidas: %s", candidatos, sorted(CUENTAS))
+    return None
+
+
+cargar_cuentas()
 
 
 @app.route("/", methods=["GET"])
@@ -203,7 +297,7 @@ def recibir_evento():
     for entry in data.get("entry", []):
         for evento in entry.get("messaging", []):
             try:
-                procesar_evento(evento)
+                procesar_evento(entry, evento)
             except Exception:
                 # Un evento roto no debe tumbar el lote entero. Si devolviéramos
                 # 500, Meta reintenta el batch COMPLETO y se repiten las
@@ -215,7 +309,7 @@ def recibir_evento():
     return "ok", 200
 
 
-def procesar_evento(evento: dict) -> None:
+def procesar_evento(entry: dict, evento: dict) -> None:
     """Decide si un evento de messaging merece respuesta y la manda."""
     remitente_id = evento.get("sender", {}).get("id")
     mensaje = evento.get("message") or {}
@@ -229,6 +323,14 @@ def procesar_evento(evento: dict) -> None:
         log.info("Eco de mensaje propio, ignorado")
         return
 
+    # Con varias cuentas conectadas, el remitente de un mensaje a la cuenta A
+    # puede ser la cuenta B. Sin esto, dos cuentas tuyas se responderían entre
+    # sí en bucle infinito.
+    if remitente_id in CUENTAS:
+        log.info("Remitente %s es una cuenta propia, ignorado (evita bucles)",
+                 CUENTAS[remitente_id])
+        return
+
     # Los eventos de lectura, entrega y reacciones también llegan por
     # entry[].messaging[] y NO traen contenido. Sin este filtro el bot
     # contestaba a los acuses de lectura de su propia respuesta.
@@ -237,29 +339,41 @@ def procesar_evento(evento: dict) -> None:
                  ", ".join(k for k in evento if k != "sender") or "vacío")
         return
 
-    log.info("Mensaje de %s: %r", remitente_id, mensaje.get("text"))
+    cuenta = cuenta_del_evento(entry, evento)
+    if cuenta is None:
+        notificar_telegram_una_vez(
+            "⚠️ Llegó un mensaje a una cuenta de Instagram que no tengo "
+            "configurada. Revisa IG_ACCESS_TOKENS."
+        )
+        return
+
+    log.info("Mensaje para @%s de %s: %r",
+             cuenta.username, remitente_id, mensaje.get("text"))
 
     texto_respuesta = elegir_respuesta(remitente_id)
-    error = enviar_mensaje(remitente_id, texto_respuesta)
+    error = enviar_mensaje(cuenta, remitente_id, texto_respuesta)
 
     if error is None:
-        log.info("Respondido a %s", remitente_id)
+        log.info("@%s respondió a %s", cuenta.username, remitente_id)
         notificar_telegram(
-            f"✅ Respondí a {remitente_id} en Instagram:\n«{texto_respuesta}»"
+            f"✅ @{cuenta.username} respondió a {remitente_id} en Instagram:\n"
+            f"«{texto_respuesta}»\n\n"
+            f"Su mensaje: «{mensaje.get('text') or '(sin texto)'}»"
         )
         return
 
     # Avisar también cuando FALLA. Antes solo se notificaba el éxito, así que el
     # día que caduque el token el bot dejaría de responder en silencio y el error
     # solo quedaría en los logs de Render.
-    log.error("No pude responder a %s: %s", remitente_id, error)
-    aviso = f"⚠️ NO pude responder a {remitente_id} en Instagram.\n\n{error}"
+    log.error("@%s no pudo responder a %s: %s", cuenta.username, remitente_id, error)
+    aviso = (f"⚠️ @{cuenta.username} NO pudo responder a {remitente_id} "
+             f"en Instagram.\n\n{error}")
     if TOKEN_CADUCADO in error or "OAuth" in error:
         aviso += (
-            "\n\nParece que el IG_ACCESS_TOKEN caducó o dejó de ser válido. "
-            "Refréscalo (dura 60 días) y actualiza la variable en Render:\n"
-            "curl -s 'https://graph.instagram.com/refresh_access_token"
-            "?grant_type=ig_refresh_token&access_token=EL_TOKEN_ACTUAL'"
+            f"\n\nParece que el token de @{cuenta.username} caducó o dejó de ser "
+            "válido. Refréscalo (dura 60 días) y actualiza IG_ACCESS_TOKENS en "
+            "Render:\ncurl -s 'https://graph.instagram.com/refresh_access_token"
+            "?grant_type=ig_refresh_token&access_token=EL_TOKEN_DE_ESA_CUENTA'"
         )
     notificar_telegram_una_vez(aviso)
 
@@ -282,21 +396,26 @@ def secret_que_valida(cuerpo_crudo: bytes, firma_recibida: str) -> str | None:
 
 
 def elegir_respuesta(remitente_id: str) -> str:
+    """Saca una frase al azar del banco que corresponda al remitente."""
     if USUARIO_ESPECIFICO_IGSID and remitente_id == USUARIO_ESPECIFICO_IGSID:
-        return MENSAJE_USUARIO_ESPECIFICO
-    return MENSAJE_GENERICO
+        return random.choice(RESPUESTAS_USUARIO_ESPECIFICO)
+    return random.choice(RESPUESTAS)
 
 
-def enviar_mensaje(destinatario_id: str, texto: str) -> str | None:
-    """Envía la respuesta al usuario de Instagram.
-    Devuelve None si Meta la aceptó, o el motivo del fallo si no."""
-    url = f"https://graph.instagram.com/v21.0/{IG_ACCOUNT_ID}/messages"
+def enviar_mensaje(cuenta: "Cuenta", destinatario_id: str, texto: str) -> str | None:
+    """Envía la respuesta desde la cuenta indicada.
+    Devuelve None si Meta la aceptó, o el motivo del fallo si no.
+
+    El path usa "me", que con la API de Instagram Login resuelve a la cuenta
+    dueña del token. Así cada cuenta se identifica sola por su token y no hay
+    forma de mandar un mensaje desde la cuenta equivocada."""
+    url = "https://graph.instagram.com/v21.0/me/messages"
     payload = {
         "recipient": {"id": destinatario_id},
         "message": {"text": texto},
         "messaging_type": "RESPONSE",
     }
-    headers = {"Authorization": f"Bearer {IG_ACCESS_TOKEN}"}
+    headers = {"Authorization": f"Bearer {cuenta.token}"}
     try:
         r = requests.post(url, json=payload, headers=headers, timeout=10)
     except requests.RequestException as e:
