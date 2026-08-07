@@ -1,4 +1,6 @@
 .env
+# Notas de traspaso entre sesiones: contienen tokens en texto plano y el repo es público.
+handoffs/
 .venv/
 venv/
 __pycache__/
