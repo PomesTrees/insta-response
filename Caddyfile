@@ -1,0 +1,15 @@
+# El dominio se inyecta desde docker-compose (variable DOMINIO).
+# Caddy pide el certificado a Let's Encrypt la primera vez que arranca y lo
+# renueva solo. No hace falta certbot ni cron.
+{$DOMINIO} {
+	# Proxy tal cual al contenedor de la app. Importante no meter aquí
+	# reescrituras del cuerpo de la petición: la firma HMAC que valida el
+	# webhook se calcula sobre los bytes exactos que manda Meta, así que
+	# cualquier transformación del body la rompería.
+	reverse_proxy bot:8000
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,66 @@
+# Despliegue en el servidor de Oracle. Dos contenedores:
+#   bot   -> la app Flask, solo accesible desde dentro de la red de compose
+#   caddy -> reverse proxy que gestiona el certificado TLS automáticamente
+#
+# Meta exige HTTPS con certificado válido para entregar webhooks; un
+# autofirmado no sirve. Caddy pide y renueva el de Let's Encrypt solo, sin
+# cron ni certbot, siempre que DOMINIO apunte a la IP pública de la VM.
+#
+# Arranque:  DOMINIO=bot.tudominio.com docker compose up -d --build
+
+# Nombre de proyecto fijo: evita que compose derive nombres del directorio y
+# acabe pisando contenedores o imágenes de otros proyectos de esta máquina.
+name: insta-response
+
+services:
+  bot:
+    build: .
+    # Tag explícito y propio. Nunca reutilizar un nombre de imagen existente:
+    # `docker build -t` sobre un tag ajeno lo sobrescribe sin avisar.
+    image: insta-response-bot:local
+    container_name: insta-response-bot
+    restart: unless-stopped
+    env_file: .env
+    # Sin "ports": la app NO se expone a internet directamente, solo a través
+    # de Caddy. Así nadie puede saltarse el TLS llegando al 8000 a pelo.
+    expose:
+      - "8000"
+    healthcheck:
+      # La imagen slim no trae curl; se usa el propio Python.
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      # Sin esto los logs crecen sin límite y acaban llenando el disco de la VM.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine     # imagen oficial, no se construye nada aquí
+    container_name: insta-response-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"     # necesario para el desafío HTTP de Let's Encrypt
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO:?define DOMINIO, ej. DOMINIO=bot.tudominio.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # guarda los certificados: sin esto se repiden en cada reinicio
+      - caddy_config:/config
+    depends_on:
+      - bot
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

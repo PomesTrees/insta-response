@@ -1,0 +1,12 @@
+# El .env NO va dentro de la imagen: se monta en runtime con env_file, para que
+# los secretos no queden horneados en una capa que cualquiera pueda extraer.
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+handoffs/
+Procfile
+README*
