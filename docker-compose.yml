@@ -6,7 +6,7 @@
 # autofirmado no sirve. Caddy pide y renueva el de Let's Encrypt solo, sin
 # cron ni certbot, siempre que DOMINIO apunte a la IP pública de la VM.
 #
-# Arranque:  DOMINIO=bot.tudominio.com docker compose up -d --build
+# Arranque:  DOMINIO=tu-subdominio.duckdns.org docker compose up -d --build
 
 # Nombre de proyecto fijo: evita que compose derive nombres del directorio y
 # acabe pisando contenedores o imágenes de otros proyectos de esta máquina.
@@ -48,7 +48,7 @@ services:
       - "80:80"     # necesario para el desafío HTTP de Let's Encrypt
       - "443:443"
     environment:
-      DOMINIO: ${DOMINIO:?define DOMINIO, ej. DOMINIO=bot.tudominio.com}
+      DOMINIO: ${DOMINIO:?define DOMINIO, ej. DOMINIO=tu-subdominio.duckdns.org}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data      # guarda los certificados: sin esto se repiden en cada reinicio
