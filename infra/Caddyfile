@@ -7,12 +7,12 @@
 #   3. Se referencia al contenedor por su `container_name`, no por localhost:
 #      cada contenedor es un host distinto dentro de la red de Docker.
 #
-# Tras editar este archivo:  docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+# Tras editar este archivo:
+#   docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 # (recarga sin cortar conexiones; no hace falta reiniciar el contenedor)
 
 # --- Bot de auto-respuesta de Instagram ---------------------------------
-# Sustituye por tu subdominio real de DuckDNS.
-occhakitten-bot.duckdns.org {
+auto-response.duckdns.org {
 	reverse_proxy insta-response-bot:8000
 
 	# Importante no transformar el cuerpo de la petición: la firma HMAC del
@@ -24,22 +24,25 @@ occhakitten-bot.duckdns.org {
 	}
 }
 
-# --- Página web (descomenta y ajusta cuando la tengas) -------------------
-# Opción A: la web es un contenedor (Nginx, Node, PHP, lo que sea).
+# --- alanzavala: aplicación web -----------------------------------------
+# Descomenta cuando el contenedor exista. Ajusta el nombre y el puerto INTERNO
+# del contenedor (no un puerto del host: la app no publica ninguno).
 #
-# mi-web.duckdns.org {
-# 	reverse_proxy mi-web:80
+# alanzavala.duckdns.org {
+# 	reverse_proxy alanzavala-web:3000
+#
 # 	log {
 # 		output stdout
 # 		format console
 # 	}
 # }
 #
-# Opción B: la web es HTML estático y lo sirve el propio Caddy. Monta la
-# carpeta en el compose de infra:  - /srv/mi-web:/srv/mi-web:ro
+# Si en algún momento sirves un sitio puramente estático, no hace falta
+# contenedor: crea /srv/<sitio> y usa este otro patrón, porque /srv ya está
+# montado dentro de Caddy.
 #
-# mi-web.duckdns.org {
-# 	root * /srv/mi-web
+# ejemplo.duckdns.org {
+# 	root * /srv/ejemplo
 # 	file_server
 # 	encode gzip
 # }

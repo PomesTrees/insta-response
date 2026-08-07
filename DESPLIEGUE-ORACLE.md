@@ -94,8 +94,8 @@ certificado válido. Sin dominio propio, **DuckDNS** da un subdominio gratuito
 que sirve perfectamente.
 
 1. Entra en <https://www.duckdns.org> y accede con GitHub/Google.
-2. Crea un subdominio, por ejemplo `occhakitten-bot` → te queda
-   `occhakitten-bot.duckdns.org`.
+2. Crea un subdominio, por ejemplo `auto-response` → te queda
+   `auto-response.duckdns.org`.
 3. En el campo `current ip` pon la **IP pública de la VM** y pulsa *update ip*.
 4. Copia tu **token** de DuckDNS (arriba en la misma página); hace falta para
    el actualizador automático del paso siguiente.
@@ -105,7 +105,7 @@ todavía sin propagar, Let's Encrypt aplica límites de reintentos y tendrás qu
 esperar:
 
 ```bash
-dig +short occhakitten-bot.duckdns.org
+dig +short auto-response.duckdns.org
 ```
 
 No hace falta tocar el `Caddyfile`: el desafío HTTP-01 de Let's Encrypt funciona
@@ -168,6 +168,12 @@ Linux):
 ssh -i ~/.ssh/TU_CLAVE_PRIVADA ubuntu@<IP_PUBLICA_DE_LA_VM>
 ```
 
+**Haz antes una copia del boot volume.** Es la red de seguridad más sólida: si
+la actualización deja la máquina inarrancable, restauras y vuelves al punto de
+partida sin perder la instancia ni su capacidad A1. En la consola: Compute →
+Instance → *Boot volume* → el volumen → **Create Manual Backup**. Comprueba
+antes en Billing si el almacenamiento de backups entra en tu Always Free.
+
 **Prepara antes la consola serie**, que es cosa distinta: es la red de
 seguridad para el caso de que tras un reinicio la máquina no levante la red y
 te quedes sin SSH. No se usa para trabajar, pero si la necesitas y no está
@@ -202,9 +208,23 @@ sudo do-release-upgrade          # a 22.04; responde a los prompts, reinicia
 sudo do-release-upgrade          # a 24.04
 ```
 
-Cuando pregunte por ficheros de configuración modificados, quedarse con la
-versión del paquete es lo seguro en un servidor recién creado sin
-personalizaciones.
+### ⚠️ Cuando pregunte por ficheros de configuración: CONSERVA los actuales
+
+Durante la actualización aparecerán prompts del tipo *"Configuration file
+`/etc/...` — install the package maintainer's version / keep the local
+version"*. **Responde siempre conservar la versión local** (la opción por
+defecto, normalmente `N`).
+
+Las imágenes de Ubuntu para Oracle Cloud **no son Ubuntu genérico**: traen
+configuración propia, en particular las reglas de `iptables` que permiten tu
+conexión SSH y los ajustes de `cloud-init` y del agente de OCI. Si aceptas la
+versión del paquete para `/etc/ssh/sshd_config` o `/etc/iptables/rules.v4`,
+puedes **quedarte fuera de la máquina** en el siguiente reinicio.
+
+Presta especial atención a cualquier prompt sobre:
+- `/etc/ssh/sshd_config`
+- `/etc/iptables/rules.v4` y `rules.v6`
+- `/etc/cloud/cloud.cfg`
 
 Verifica al terminar:
 ```bash
@@ -249,15 +269,43 @@ sudo firewall-cmd --reload
 ```
 
 **Ubuntu (imagen de Oracle):** trae reglas de iptables, no ufw activo.
+
+**Nunca uses un número de posición fijo.** Las reglas se evalúan en orden y al
+final hay un `REJECT` que descarta el resto; si insertas *después* de él, tu
+regla no sirve de nada y no hay ningún error que te avise. Mira primero dónde
+está:
+
 ```bash
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
-sudo netfilter-persistent save     # sin esto, se pierden al reiniciar
+sudo iptables -L INPUT -n --line-numbers
+```
+
+Localiza el número de línea del `REJECT ... reject-with icmp-host-prohibited` e
+inserta **en esa misma posición**, para quedar justo antes (aquí se asume que
+es la 5; usa el tuyo):
+
+```bash
+sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo iptables -L INPUT -n --line-numbers    # verifica ANTES de guardar
+sudo netfilter-persistent save              # sin esto, se pierden al reiniciar
+```
+
+Nota: la política por defecto de la cadena es `ACCEPT`, así que equivocarse
+borrando reglas no te deja fuera de la máquina — como mucho la deja demasiado
+abierta un momento. Eso quita presión para experimentar aquí.
+
+**Ojo con los duplicados.** Tras una actualización de versión es fácil acabar
+con el conjunto de reglas repetido dos veces (guardar reglas ya cargadas). Las
+copias tras el `REJECT` son inalcanzables y conviene borrarlas, por orden
+descendente para que no se renumeren:
+
+```bash
+sudo iptables -D INPUT 10   # de mayor a menor
 ```
 
 Verifica desde fuera de la VM, no desde dentro:
 ```bash
-nc -vz occhakitten-bot.duckdns.org 443
+nc -vz auto-response.duckdns.org 443
 ```
 
 ---
@@ -301,25 +349,41 @@ chmod 600 ~/insta-response/.env
 
 ## 5. Arrancar
 
+El proxy y el bot son dos proyectos distintos que se comunican por una red
+compartida. Hay que crearla una sola vez antes de nada:
+
 ```bash
-DOMINIO=occhakitten-bot.duckdns.org docker compose up -d --build
+docker network create web
 ```
 
-Para que el dominio no haya que repetirlo en cada comando, ponlo en el `.env`:
+Primero el proxy (es lo único que ocupa los puertos 80 y 443):
+
+```bash
+cd ~/insta-response/infra
+docker compose up -d
 ```
-DOMINIO=occhakitten-bot.duckdns.org
+
+Y después el bot:
+
+```bash
+cd ~/insta-response
+docker compose up -d --build
 ```
+
+El dominio no se pasa por variable de entorno: está escrito en
+`infra/Caddyfile`, donde vive junto al resto de sitios del servidor.
 
 Comprueba:
 ```bash
 docker compose ps
 docker compose logs -f bot
-curl -s -o /dev/null -w "%{http_code}\n" https://occhakitten-bot.duckdns.org/
+docker logs -f caddy
+curl -s -o /dev/null -w "%{http_code}\n" https://auto-response.duckdns.org/
 ```
 
 El primer arranque tarda algo más: Caddy está negociando el certificado. Si
-falla, `docker compose logs caddy` lo dice con claridad (casi siempre es DNS
-que no ha propagado o el puerto 80 cerrado).
+falla, `docker logs caddy` lo dice con claridad (casi siempre es DNS que no ha
+propagado o el puerto 80 cerrado).
 
 ---
 
@@ -327,14 +391,14 @@ que no ha propagado o el puerto 80 cerrado).
 
 App Dashboard → Webhooks → objeto Instagram → **Edit**:
 
-- **Callback URL:** `https://occhakitten-bot.duckdns.org/webhook`
+- **Callback URL:** `https://auto-response.duckdns.org/webhook`
 - **Verify Token:** el mismo `IG_VERIFY_TOKEN` de siempre
 
 Pulsa *Verify and Save*. Si da error, mira `docker compose logs -f bot`: ahora
 verás la petición de verificación llegar en tiempo real.
 
 Actualiza también App settings → Basic → **Privacy policy URL** a
-`https://occhakitten-bot.duckdns.org/privacy`, porque la de Render dejará de servirse
+`https://auto-response.duckdns.org/privacy`, porque la de Render dejará de servirse
 cuando apagues ese servicio.
 
 ---
