@@ -24,6 +24,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data      # certificados: sin esto se repiden en cada reinicio
       - caddy_config:/config
+      # Sitios estáticos: cada carpeta de /srv es una web. Montado de una vez
+      # para que añadir un sitio HTML no requiera tocar este archivo nunca más;
+      # basta con crear la carpeta y añadir su bloque al Caddyfile.
+      # Solo lectura: Caddy sirve, no escribe.
+      - /srv:/srv:ro
     networks:
       - web
     logging:
