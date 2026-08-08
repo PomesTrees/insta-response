@@ -212,25 +212,25 @@ def cargar_cuentas() -> None:
 def cuenta_del_evento(entry: dict, evento: dict) -> Cuenta | None:
     """Averigua a qué cuenta conectada iba dirigido el mensaje.
 
-    Meta identifica a la cuenta receptora en `entry.id`, y también en
+    Meta identifica a la cuenta receptora en `entry.id` y en
     `messaging[].recipient.id`. Se prueban los dos porque el formato varía
-    entre tipos de evento y no queremos depender de cuál manda hoy."""
-    candidatos = [entry.get("id"), evento.get("recipient", {}).get("id")]
-    for identificador in candidatos:
+    entre tipos de evento.
+
+    Si ninguno coincide con una cuenta nuestra, el evento NO es nuestro y hay
+    que ignorarlo. Aquí hubo un fallo real: existía un respaldo que, con una
+    sola cuenta configurada, la usaba aunque los IDs no cuadraran. Sonaba
+    prudente y era justo lo contrario.
+
+    Lo que pasaba: la cuenta secundaria de pruebas también estaba suscrita a
+    la app, así que al responderle un mensaje, Meta mandaba además SU copia de
+    la conversación. En esa copia el remitente somos nosotros, pero con otro
+    ID, porque los IGSID son distintos según desde qué cuenta se miren. El
+    respaldo hacía que el bot intentara responderse a sí mismo y Meta
+    contestara "no se puede encontrar al usuario solicitado" (2534014), con su
+    correspondiente aviso de fallo por Telegram."""
+    for identificador in (entry.get("id"), evento.get("recipient", {}).get("id")):
         if identificador and identificador in CUENTAS:
             return CUENTAS[identificador]
-
-    # Con una sola cuenta configurada no hay ambigüedad posible: responde igual
-    # aunque el ID no cuadre, en vez de quedarse callado por un detalle de formato.
-    unicas = {c.id: c for c in CUENTAS.values()}
-    if len(unicas) == 1:
-        cuenta = next(iter(unicas.values()))
-        log.warning("IDs del evento %s no están en la tabla; uso la única cuenta (%s)",
-                    candidatos, cuenta)
-        return cuenta
-
-    log.error("No sé a qué cuenta pertenece el evento. IDs vistos: %s. "
-              "Cuentas conocidas: %s", candidatos, sorted(CUENTAS))
     return None
 
 
@@ -341,10 +341,17 @@ def procesar_evento(entry: dict, evento: dict) -> None:
 
     cuenta = cuenta_del_evento(entry, evento)
     if cuenta is None:
-        notificar_telegram_una_vez(
-            "⚠️ Llegó un mensaje a una cuenta de Instagram que no tengo "
-            "configurada. Revisa IG_ACCESS_TOKENS."
-        )
+        # Recibir eventos de cuentas que no gestionamos es NORMAL: cualquier
+        # cuenta suscrita a esta app genera webhooks, incluidas las que solo se
+        # usaron para probar. Por eso esto es una línea de log y no un aviso de
+        # Telegram: como aviso sonaría en cada respuesta que mandáramos.
+        #
+        # Si acabas de añadir una cuenta a IG_ACCESS_TOKENS y ves esto con su
+        # ID, es que falta reiniciar el contenedor para que cargue su token.
+        log.info("Evento de una cuenta que no gestionamos (entry.id=%s, "
+                 "recipient=%s), ignorado. Cuentas conocidas: %s",
+                 entry.get("id"), evento.get("recipient", {}).get("id"),
+                 sorted({c.username for c in CUENTAS.values()}))
         return
 
     log.info("Mensaje para @%s de %s: %r",
