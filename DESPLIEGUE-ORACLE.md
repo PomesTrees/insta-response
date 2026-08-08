@@ -356,10 +356,12 @@ compartida. Hay que crearla una sola vez antes de nada:
 docker network create web
 ```
 
-Primero el proxy (es lo único que ocupa los puertos 80 y 443):
+Primero el proxy. **No vive en este repositorio**: es infraestructura
+compartida por todos los sitios del servidor, así que está en `~/infra` (ver
+su propio README). Es lo único que ocupa los puertos 80 y 443:
 
 ```bash
-cd ~/insta-response/infra
+cd ~/infra
 docker compose up -d
 ```
 
@@ -371,7 +373,8 @@ docker compose up -d --build
 ```
 
 El dominio no se pasa por variable de entorno: está escrito en
-`infra/Caddyfile`, donde vive junto al resto de sitios del servidor.
+`~/infra/Caddyfile`, fuera de este repositorio, donde vive junto al resto de
+sitios del servidor.
 
 Comprueba:
 ```bash

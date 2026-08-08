@@ -1,5 +1,5 @@
-# Solo el bot. El reverse proxy y los certificados viven en infra/, porque son
-# compartidos con el resto de proyectos del servidor.
+# Solo el bot. El reverse proxy y los certificados viven en ~/infra (fuera de este repo:
+# son compartidos con el resto de proyectos del servidor).
 #
 # Este contenedor NO publica ningún puerto: solo es accesible desde la red `web`,
 # es decir, a través de Caddy. Así nadie puede saltarse el TLS llegando al 8000.
@@ -15,7 +15,7 @@ services:
     # Tag explícito y propio. Nunca reutilizar un nombre de imagen existente:
     # `docker build -t` sobre un tag ajeno lo sobrescribe sin avisar.
     image: insta-response-bot:local
-    # Caddy enruta hacia este nombre; si lo cambias, actualiza infra/Caddyfile.
+    # Caddy enruta hacia este nombre; si lo cambias, actualiza ~/infra/Caddyfile.
     container_name: insta-response-bot
     restart: unless-stopped
     env_file: .env

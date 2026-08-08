@@ -88,10 +88,15 @@ responde desde la cuenta a la que llegó.
 ## Ponerlo en marcha
 
 ```bash
-docker network create web      # solo la primera vez
-cd infra && docker compose up -d
-cd ..    && docker compose up -d --build
+docker network create web             # solo la primera vez
+cd ~/infra && docker compose up -d    # el proxy compartido, fuera de este repo
+cd ~/insta-response && docker compose up -d --build
 ```
+
+El reverse proxy que termina TLS **no vive aquí**: es compartido por todos los
+sitios del servidor y está en `~/infra`, con su propio README. Este repositorio
+solo contiene el bot, que no publica ningún puerto y solo es alcanzable a
+través de ese proxy.
 
 Y en el panel de Meta, en la sección Webhooks del objeto Instagram:
 
